@@ -11,17 +11,6 @@ def newton_method(
     tolerance=1e-10,
     max_iterations=50
 ):
-    """
-    Classical Newton's method for solving F(x) = 0.
-
-    Newton step:
-
-        J(x_k) Δx_k = -F(x_k)
-
-    Update:
-
-        x_(k+1) = x_k + Δx_k
-    """
 
     x = np.asarray(x0, dtype=float).copy()
 
@@ -49,8 +38,6 @@ def newton_method(
 
         J = np.asarray(jacobian(x), dtype=float)
 
-        # Solve:
-        # J Δx = -F(x)
 
         delta_x = solve(J, -fx)
 
@@ -67,7 +54,6 @@ def newton_method(
             "correction_norm": correction_norm
         })
 
-        # Newton update
 
         x = x + delta_x
 
