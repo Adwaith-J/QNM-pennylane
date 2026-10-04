@@ -1,0 +1,6 @@
+{
+    "dimensions": [2, 4, 8],
+    "shots": [100, 500, 1000],
+    "tolerance": 1e-8,
+    "max_iterations": 50
+}
