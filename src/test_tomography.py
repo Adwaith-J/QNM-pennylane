@@ -1,42 +1,53 @@
 import numpy as np
 
-from src.quantum_linear_solver import solve_fixed_linear_system
-from src.tomography import tomography_recovery
-
-
-A = np.array([
-    [4.0, 2.0],
-    [1.0, -1.0]
-])
-
-b = np.array([
-    -1.0,
-    0.0
-])
-
-
-result = solve_fixed_linear_system(
-    A,
-    b,
-    shots=None
+from src.tomography import (
+    tomography_recovery,
+    scale_correction
 )
 
+
+state = np.array([
+    -1.0 / np.sqrt(2.0),
+    -1.0 / np.sqrt(2.0)
+])
+
+C_delta_x = np.sqrt(
+    1.0 / 18.0
+)
+
+exact_delta_x = np.array([
+    -1.0 / 6.0,
+    -1.0 / 6.0
+])
 
 tomography_result = tomography_recovery(
-    probabilities=result["probabilities"],
-    normalized_solution=result["normalized_classical_solution"],
-    solution_norm=result["solution_norm"],
-    exact_delta_x=result["exact_solution"]
+    state,
+    shots=10000
 )
 
+recovered_delta_x = scale_correction(
+    tomography_result["recovered_state"],
+    C_delta_x
+)
+
+correction_error = np.linalg.norm(
+    recovered_delta_x
+    - exact_delta_x,
+    ord=2
+)
 
 print("\n=== Tomography Recovery Test ===")
 
-print("Exact Delta x:")
-print(tomography_result["exact_delta_x"])
+print("Recovered Delta x:")
+print(recovered_delta_x)
 
-print("\nRecovered Delta x:")
-print(tomography_result["recovered_delta_x"])
+print("\nExact Delta x:")
+print(exact_delta_x)
+
+print("\nTomography l_inf Error:")
+print(
+    tomography_result["linf_error"]
+)
 
 print("\nCorrection Error:")
-print(tomography_result["correction_error_l2"])
+print(correction_error)

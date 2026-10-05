@@ -1,16 +1,26 @@
+import sys
 import time
 import numpy as np
 
-from quantum_linear_solver import (
+if __package__ is None:
+    sys.path.append(
+        str(
+            __import__(
+                "pathlib"
+            ).Path(__file__).resolve().parent.parent
+        )
+    )
+
+from src.quantum_linear_solver import  (
     normalize_matrix,
     prepare_rhs_state,
     solve_fixed_linear_system
 )
 
-from tomography import (
+from src.tomography import (
     tomography_recovery,
     calculate_alpha,
-    estimate_success_probability,
+    estimate_reference_success_probability,
     calculate_correction_scale,
     scale_correction
 )
@@ -59,7 +69,7 @@ def quantum_newton_method(
                 "correction_error": 0.0,
                 "tomography_linf_error": 0.0,
                 "alpha": None,
-                "success_probability": None,
+                "reference_success_probability": None,
                 "C_delta_x": 0.0,
                 "C_b": 0.0,
                 "jacobian_scale": 0.0
@@ -90,7 +100,7 @@ def quantum_newton_method(
                 "correction_error": 0.0,
                 "tomography_linf_error": 0.0,
                 "alpha": None,
-                "success_probability": None,
+                "reference_success_probability": None,
                 "C_delta_x": 0.0,
                 "C_b": rhs_norm,
                 "jacobian_scale": 0.0
@@ -137,8 +147,8 @@ def quantum_newton_method(
             alpha_epsilon
         )
 
-        success_probability = (
-            estimate_success_probability(
+        reference_success_probability = (
+            estimate_reference_success_probability(
                 normalized_J,
                 normalized_b,
                 alpha
@@ -148,7 +158,7 @@ def quantum_newton_method(
         C_delta_x = calculate_correction_scale(
             alpha,
             C_b,
-            success_probability,
+            reference_success_probability,
             J
         )
 
@@ -192,7 +202,9 @@ def quantum_newton_method(
                 ]
             ),
             "alpha": alpha,
-            "success_probability": success_probability,
+            "reference_success_probability": (
+                reference_success_probability
+            ),
             "C_delta_x": C_delta_x,
             "C_b": C_b,
             "jacobian_scale": J_scale
@@ -228,7 +240,7 @@ def quantum_newton_method(
 
 if __name__ == "__main__":
 
-    from problems import (
+    from src.problems import (
         F,
         jacobian,
         INITIAL_GUESS
@@ -284,8 +296,8 @@ if __name__ == "__main__":
                 f"             "
                 f"alpha = "
                 f"{item['alpha']:.6e} | "
-                f"p = "
-                f"{item['success_probability']:.6e} | "
+                f"p_ref = "
+                f"{item['reference_success_probability']:.6e} | "
                 f"C_delta_x = "
                 f"{item['C_delta_x']:.6e} | "
                 f"Tomography l_inf Error = "

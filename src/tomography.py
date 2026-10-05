@@ -16,48 +16,31 @@ def state_probabilities(
             "State must be one-dimensional."
         )
 
-    norm = np.linalg.norm(state)
+    norm = np.linalg.norm(
+        state,
+        ord=2
+    )
 
-    if np.isclose(norm, 0.0):
+    if np.isclose(
+        norm,
+        0.0
+    ):
         raise ValueError(
             "State cannot have zero norm."
         )
 
     state = state / norm
 
-    return np.abs(state) ** 2
+    probabilities = (
+        np.abs(state) ** 2
+    )
+
+    return probabilities
 
 
 def sample_probabilities(
-    state: np.ndarray,
+    probabilities: np.ndarray,
     shots: int
-) -> np.ndarray:
-
-    if shots <= 0:
-        raise ValueError(
-            "shots must be positive."
-        )
-
-    probabilities = state_probabilities(
-        state
-    )
-
-    outcomes = np.random.choice(
-        len(probabilities),
-        size=shots,
-        p=probabilities
-    )
-
-    counts = np.bincount(
-        outcomes,
-        minlength=len(probabilities)
-    )
-
-    return counts / shots
-
-
-def reconstruct_amplitudes(
-    probabilities: np.ndarray
 ) -> np.ndarray:
 
     probabilities = np.asarray(
@@ -70,54 +53,160 @@ def reconstruct_amplitudes(
             "Probabilities must be one-dimensional."
         )
 
-    if np.any(probabilities < 0):
+    if shots <= 0:
         raise ValueError(
-            "Probabilities cannot be negative."
+            "Shots must be positive."
         )
 
-    total = np.sum(probabilities)
+    probability_sum = np.sum(
+        probabilities
+    )
 
-    if np.isclose(total, 0.0):
+    if np.isclose(
+        probability_sum,
+        0.0
+    ):
         raise ValueError(
-            "Probabilities cannot all be zero."
+            "Probabilities cannot sum to zero."
         )
 
     probabilities = (
-        probabilities / total
+        probabilities
+        / probability_sum
     )
 
-    return np.sqrt(
+    counts = np.random.multinomial(
+        shots,
+        probabilities
+    )
+
+    return counts / shots
+
+
+def reconstruct_amplitudes(
+    sampled_probabilities: np.ndarray,
+    reference_signs: np.ndarray | None = None
+) -> np.ndarray:
+
+    sampled_probabilities = np.asarray(
+        sampled_probabilities,
+        dtype=float
+    )
+
+    if sampled_probabilities.ndim != 1:
+        raise ValueError(
+            "Sampled probabilities must be one-dimensional."
+        )
+
+    amplitudes = np.sqrt(
         np.maximum(
-            probabilities,
+            sampled_probabilities,
             0.0
         )
     )
 
+    if reference_signs is not None:
+
+        reference_signs = np.asarray(
+            reference_signs,
+            dtype=float
+        )
+
+        if reference_signs.shape != amplitudes.shape:
+            raise ValueError(
+                "Reference signs must match the state dimension."
+            )
+
+        signs = np.where(
+            reference_signs < 0.0,
+            -1.0,
+            1.0
+        )
+
+        amplitudes *= signs
+
+    amplitude_norm = np.linalg.norm(
+        amplitudes,
+        ord=2
+    )
+
+    if np.isclose(
+        amplitude_norm,
+        0.0
+    ):
+        raise ValueError(
+            "Reconstructed amplitudes cannot have zero norm."
+        )
+
+    amplitudes = (
+        amplitudes
+        / amplitude_norm
+    )
+
+    return amplitudes
+
 
 def linf_error(
-    recovered: np.ndarray,
-    exact: np.ndarray
+    reconstructed_state: np.ndarray,
+    reference_state: np.ndarray
 ) -> float:
 
-    recovered = np.asarray(
-        recovered,
+    reconstructed_state = np.asarray(
+        reconstructed_state,
         dtype=float
     )
 
-    exact = np.asarray(
-        exact,
+    reference_state = np.asarray(
+        reference_state,
         dtype=float
     )
 
-    if recovered.shape != exact.shape:
+    if reconstructed_state.shape != reference_state.shape:
         raise ValueError(
-            "Recovered and exact states must have the same shape."
+            "States must have the same shape."
         )
+
+    reconstructed_norm = np.linalg.norm(
+        reconstructed_state,
+        ord=2
+    )
+
+    reference_norm = np.linalg.norm(
+        reference_state,
+        ord=2
+    )
+
+    if np.isclose(
+        reconstructed_norm,
+        0.0
+    ):
+        raise ValueError(
+            "Reconstructed state cannot have zero norm."
+        )
+
+    if np.isclose(
+        reference_norm,
+        0.0
+    ):
+        raise ValueError(
+            "Reference state cannot have zero norm."
+        )
+
+    reconstructed_state = (
+        reconstructed_state
+        / reconstructed_norm
+    )
+
+    reference_state = (
+        reference_state
+        / reference_norm
+    )
 
     return float(
         np.max(
             np.abs(
-                recovered - exact
+                reconstructed_state
+                - reference_state
             )
         )
     )
@@ -125,80 +214,65 @@ def linf_error(
 
 def tomography_recovery(
     state: np.ndarray,
-    shots: int
-):
+    shots: int = 10000
+) -> dict:
 
     state = np.asarray(
         state,
         dtype=float
     )
 
-    state_norm = np.linalg.norm(state)
+    if state.ndim != 1:
+        raise ValueError(
+            "State must be one-dimensional."
+        )
+
+    norm = np.linalg.norm(
+        state,
+        ord=2
+    )
 
     if np.isclose(
-        state_norm,
+        norm,
         0.0
     ):
         raise ValueError(
             "State cannot have zero norm."
         )
 
-    normalized_state = (
-        state / state_norm
+    state = (
+        state
+        / norm
     )
 
-    probabilities = sample_probabilities(
-        normalized_state,
+    probabilities = state_probabilities(
+        state
+    )
+
+    sampled_probabilities = sample_probabilities(
+        probabilities,
         shots
     )
 
-    amplitudes = reconstruct_amplitudes(
-        probabilities
-    )
-
     reference_signs = np.sign(
-        normalized_state
+        state
     )
 
-    reference_signs[
-        np.isclose(
-            normalized_state,
-            0.0
-        )
-    ] = 0.0
-
-    recovered_state = (
-        amplitudes
-        * reference_signs
+    recovered_state = reconstruct_amplitudes(
+        sampled_probabilities,
+        reference_signs
     )
 
-    recovered_norm = np.linalg.norm(
-        recovered_state
-    )
-
-    if np.isclose(
-        recovered_norm,
-        0.0
-    ):
-        raise ValueError(
-            "Tomography produced a zero state."
-        )
-
-    recovered_state = (
-        recovered_state
-        / recovered_norm
-    )
-
-    error_linf = linf_error(
+    error = linf_error(
         recovered_state,
-        normalized_state
+        state
     )
 
     return {
         "probabilities": probabilities,
-        "amplitudes": amplitudes,
+        "sampled_probabilities": sampled_probabilities,
         "recovered_state": recovered_state,
-        "linf_error": error_linf,
+        "linf_error": error,
         "shots": shots
     }
 
@@ -278,15 +352,24 @@ def calculate_alpha(
         )
 
     term = np.exp(
-        math.lgamma(2.0 * c + 1.0)
-        - math.lgamma(c + 1.0)
-        - math.lgamma(c + 1.0)
+        math.lgamma(
+            2.0 * c + 1.0
+        )
+        - math.lgamma(
+            c + 1.0
+        )
+        - math.lgamma(
+            c + 1.0
+        )
         - 2.0 * c * np.log(2.0)
     )
 
     alpha_sum = term
 
-    for j in range(1, j0 + 1):
+    for j in range(
+        1,
+        j0 + 1
+    ):
 
         term *= (
             (c - j + 1.0)
@@ -301,10 +384,12 @@ def calculate_alpha(
         * alpha_sum
     )
 
-    return float(alpha)
+    return float(
+        alpha
+    )
 
 
-def estimate_success_probability(
+def estimate_reference_success_probability(
     normalized_matrix: np.ndarray,
     rhs_state: np.ndarray,
     alpha: float
@@ -320,13 +405,27 @@ def estimate_success_probability(
         dtype=float
     )
 
+    if normalized_matrix.ndim != 2:
+        raise ValueError(
+            "normalized_matrix must be a matrix."
+        )
+
+    if (
+        normalized_matrix.shape[0]
+        != normalized_matrix.shape[1]
+    ):
+        raise ValueError(
+            "normalized_matrix must be square."
+        )
+
     if alpha <= 0:
         raise ValueError(
             "alpha must be positive."
         )
 
     rhs_norm = np.linalg.norm(
-        rhs_state
+        rhs_state,
+        ord=2
     )
 
     if np.isclose(
@@ -338,7 +437,8 @@ def estimate_success_probability(
         )
 
     rhs_state = (
-        rhs_state / rhs_norm
+        rhs_state
+        / rhs_norm
     )
 
     solution = np.linalg.solve(
@@ -358,14 +458,11 @@ def estimate_success_probability(
 
     if probability <= 0:
         raise ValueError(
-            "Estimated QLSS success probability is not positive."
+            "Reference QLSS success probability is not positive."
         )
 
     return float(
-        min(
-            probability,
-            1.0
-        )
+        probability
     )
 
 
@@ -397,7 +494,9 @@ def calculate_correction_scale(
         )
 
     jacobian_max = np.max(
-        np.abs(jacobian)
+        np.abs(
+            jacobian
+        )
     )
 
     if np.isclose(
@@ -439,108 +538,63 @@ def scale_correction(
 
 if __name__ == "__main__":
 
-    from quantum_linear_solver import (
-    normalize_matrix,
-    prepare_rhs_state
-)
-
-    J = np.array([
+    jacobian = np.array([
         [4.0, 2.0],
         [1.0, -1.0]
     ])
 
-    b = np.array([
+    rhs = np.array([
         -1.0,
         0.0
     ])
 
-    normalized_J, J_scale = normalize_matrix(
-        J
+    normalized_jacobian = (
+        jacobian
+        / np.max(
+            np.abs(jacobian)
+        )
     )
 
-    normalized_b, C_b = prepare_rhs_state(
-        b
+    C_b = np.linalg.norm(
+        rhs,
+        ord=2
     )
 
-    epsilon = 1e-3
+    normalized_rhs = (
+        rhs
+        / C_b
+    )
 
     alpha = calculate_alpha(
-        normalized_J,
-        epsilon
+        normalized_jacobian,
+        1e-3
     )
 
-    p = estimate_success_probability(
-        normalized_J,
-        normalized_b,
-        alpha
+    p_reference = (
+        estimate_reference_success_probability(
+            normalized_jacobian,
+            normalized_rhs,
+            alpha
+        )
     )
 
     C_delta_x = calculate_correction_scale(
         alpha,
         C_b,
-        p,
-        J
+        p_reference,
+        jacobian
     )
 
     classical_delta_x = np.linalg.solve(
-        J,
-        b
+        jacobian,
+        rhs
     )
 
     normalized_delta_x = (
         classical_delta_x
         / np.linalg.norm(
-            classical_delta_x
-        )
-    )
-
-    scaled_delta_x = scale_correction(
-        normalized_delta_x,
-        C_delta_x
-    )
-
-    print("\nJacobian:")
-    print(J)
-
-    print("\nNormalized Jacobian:")
-    print(normalized_J)
-
-    print("\n||J||_max:")
-    print(J_scale)
-
-    print("\nC_b:")
-    print(C_b)
-
-    print("\nAlpha:")
-    print(alpha)
-
-    print("\nQLSS success probability p:")
-    print(p)
-
-    print("\nC_delta_x:")
-    print(C_delta_x)
-
-    print("\nClassical Delta x:")
-    print(classical_delta_x)
-
-    print("\n||Delta x||:")
-    print(
-        np.linalg.norm(
-            classical_delta_x
-        )
-    )
-
-    print("\nNormalized Delta x:")
-    print(normalized_delta_x)
-
-    print("\nScaled Delta x:")
-    print(scaled_delta_x)
-
-    print("\nScaling error:")
-    print(
-        np.linalg.norm(
-            scaled_delta_x
-            - classical_delta_x
+            classical_delta_x,
+            ord=2
         )
     )
 
@@ -549,28 +603,47 @@ if __name__ == "__main__":
         shots=10000
     )
 
-    print("\nTomography probabilities:")
-    print(
-        tomography_result[
-            "probabilities"
-        ]
-    )
-
-    print("\nTomography amplitudes:")
-    print(
-        tomography_result[
-            "amplitudes"
-        ]
-    )
-
-    print("\nTomography recovered state:")
-    print(
+    recovered_delta_x = scale_correction(
         tomography_result[
             "recovered_state"
-        ]
+        ],
+        C_delta_x
     )
 
-    print("\nl_inf tomography error:")
+    print("\nJacobian:")
+    print(jacobian)
+
+    print("\nNormalized Jacobian:")
+    print(normalized_jacobian)
+
+    print("\nC_b:")
+    print(C_b)
+
+    print("\nAlpha:")
+    print(alpha)
+
+    print("\nReference QLSS success probability p_ref:")
+    print(p_reference)
+
+    print("\nC_delta_x:")
+    print(C_delta_x)
+
+    print("\nClassical Delta x:")
+    print(classical_delta_x)
+
+    print("\nRecovered Delta x:")
+    print(recovered_delta_x)
+
+    print("\nCorrection error:")
+    print(
+        np.linalg.norm(
+            recovered_delta_x
+            - classical_delta_x,
+            ord=2
+        )
+    )
+
+    print("\nTomography l_inf error:")
     print(
         tomography_result[
             "linf_error"
