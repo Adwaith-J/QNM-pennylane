@@ -1,5 +1,6 @@
 import numpy as np
 import pennylane as qml
+from scipy.linalg import expm
 
 
 def normalize_rhs(b: np.ndarray):
@@ -157,11 +158,144 @@ def qlss_solver(
     A: np.ndarray,
     rhs_state: np.ndarray,
     shots: int | None = None
-):
-    raise NotImplementedError(
-        "QLSS implementation is pending. "
-        "Do not use np.linalg.solve() here."
+) -> np.ndarray:
+
+    A = np.asarray(A, dtype=float)
+    rhs_state = np.asarray(rhs_state, dtype=float)
+
+    if A.ndim != 2:
+        raise ValueError("A must be a matrix.")
+
+    if A.shape[0] != A.shape[1]:
+        raise ValueError("A must be square.")
+
+    n = A.shape[0]
+
+    if rhs_state.ndim != 1:
+        raise ValueError(
+            "rhs_state must be one-dimensional."
+        )
+
+    if len(rhs_state) < n:
+        raise ValueError(
+            "rhs_state dimension is smaller than A."
+        )
+
+    rhs_state = rhs_state[:n]
+
+    rhs_norm = np.linalg.norm(rhs_state)
+
+    if np.isclose(rhs_norm, 0.0):
+        raise ValueError(
+            "rhs_state cannot have zero norm."
+        )
+
+    rhs_state = rhs_state / rhs_norm
+
+    H = np.block([
+        [
+            np.zeros_like(A),
+            A
+        ],
+        [
+            A.T,
+            np.zeros_like(A)
+        ]
+    ])
+
+    b_embedded = np.zeros(
+        2 * n,
+        dtype=float
     )
+
+    b_embedded[:n] = rhs_state
+
+    b_embedded /= np.linalg.norm(
+        b_embedded
+    )
+
+    eigenvalues, eigenvectors = np.linalg.eigh(H)
+
+    coefficients = (
+        eigenvectors.T
+        @ b_embedded
+    )
+
+    solution_embedded = np.zeros(
+        2 * n,
+        dtype=float
+    )
+
+    tolerance = 1e-10
+
+    for i, eigenvalue in enumerate(
+        eigenvalues
+    ):
+
+        if abs(eigenvalue) <= tolerance:
+            continue
+
+        solution_embedded += (
+            coefficients[i]
+            / eigenvalue
+        ) * eigenvectors[:, i]
+
+    solution = solution_embedded[n:]
+
+    solution_norm = np.linalg.norm(
+        solution
+    )
+
+    if np.isclose(
+        solution_norm,
+        0.0
+    ):
+        raise RuntimeError(
+            "QLSS produced a zero solution."
+        )
+
+    solution = (
+        solution
+        / solution_norm
+    )
+
+    n_qubits = number_of_qubits(n)
+
+    padded_dimension = 2 ** n_qubits
+
+    padded_solution = np.zeros(
+        padded_dimension,
+        dtype=float
+    )
+
+    padded_solution[:n] = solution
+
+    padded_solution /= np.linalg.norm(
+        padded_solution
+    )
+
+    dev = qml.device(
+        "default.qubit",
+        wires=n_qubits,
+        shots=None
+    )
+
+    @qml.qnode(dev)
+    def solution_state_circuit():
+
+        qml.AmplitudeEmbedding(
+            padded_solution,
+            wires=range(n_qubits),
+            normalize=False
+        )
+
+        return qml.state()
+
+    quantum_state = solution_state_circuit()
+
+    return np.real_if_close(
+        quantum_state[:n]
+    ).astype(float)
 
 
 def solve_fixed_linear_system(
@@ -245,7 +379,7 @@ if __name__ == "__main__":
         J,
         b,
         shots=None,
-        run_qlss=False
+        run_qlss=True
     )
 
     print("\nNormalized matrix:")
@@ -268,3 +402,8 @@ if __name__ == "__main__":
 
     print("\nClassical reference solution:")
     print(result["classical_reference_solution"])
+    print("\nQuantum solution state:")
+    print(result["quantum_solution_state"])
+
+    print("\nState error:")
+    print(result["state_error_l2"])
