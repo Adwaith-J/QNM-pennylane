@@ -1,0 +1,11 @@
+{
+  "problem": "Quadratic system from src/problems.py",
+  "dimension": 2,
+  "initial_guess": [2.0, 1.0],
+  "tolerance": 1e-8,
+  "max_iterations": 50,
+  "shots": 1000,
+  "simulator": "default.qubit",
+  "tomography_shots": 10000,
+  "alpha_epsilon": 1e-3
+}
