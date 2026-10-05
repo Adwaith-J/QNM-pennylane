@@ -1,8 +1,19 @@
+import sys
 import csv
 import time
+from pathlib import Path
+
 import numpy as np
 
+sys.path.append(
+    str(
+        Path(__file__).resolve().parent.parent
+    )
+)
+
 from src.quantum_newton import quantum_newton_method
+
+
 
 
 def create_problem(n):
