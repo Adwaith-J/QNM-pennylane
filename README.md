@@ -25,6 +25,7 @@ experiments/results/
 ```
 
 The saved file format is JSON and stores the experiment metadata, quantum configuration, classical comparison data, quantum Newton result, and per-iteration history. The dashboard loads this saved output instead of hard-coding results.
+The repository includes `experiments/results/experiment_20261005_211502.json` as a sample saved experiment that can be loaded from the dashboard.
 
 Validation:
 - Existing tests continue to check the original algorithm behavior
