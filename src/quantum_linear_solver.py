@@ -1,5 +1,6 @@
 import numpy as np
 import pennylane as qml
+from scipy.linalg import expm
 
 
 def normalize_rhs(b: np.ndarray):
@@ -41,7 +42,7 @@ def pad_to_power_of_two(vector: np.ndarray):
         return vector.copy()
 
     padded = np.zeros(target_dimension, dtype=float)
-    padded[: len(vector)] = vector
+    padded[:len(vector)] = vector
 
     return padded
 
@@ -50,11 +51,73 @@ def prepare_rhs_state(b: np.ndarray):
     b_normalized, norm_b = normalize_rhs(b)
 
     padded_b = pad_to_power_of_two(b_normalized)
-
-    
     padded_b = padded_b / np.linalg.norm(padded_b)
 
     return padded_b, norm_b
+
+
+def build_Ob(b: np.ndarray):
+    return prepare_rhs_state(b)
+
+
+def build_OA1(A: np.ndarray):
+    A = np.asarray(A, dtype=float)
+
+    column_indices = {}
+
+    for j in range(A.shape[0]):
+        column_indices[j] = np.flatnonzero(
+            ~np.isclose(A[j], 0.0)
+        ).tolist()
+
+    return column_indices
+
+
+def build_OA2(A: np.ndarray):
+    A = np.asarray(A, dtype=float)
+
+    def oracle(j: int, k: int):
+        if j < 0 or j >= A.shape[0]:
+            raise IndexError("Row index out of range.")
+
+        if k < 0 or k >= A.shape[1]:
+            raise IndexError("Column index out of range.")
+
+        return A[j, k]
+
+    return oracle
+
+
+def finite_difference_jacobian(
+    F,
+    x: np.ndarray,
+    step: float = 1e-6
+):
+    x = np.asarray(x, dtype=float)
+    fx = np.asarray(F(x), dtype=float)
+
+    if fx.ndim != 1:
+        raise ValueError("F(x) must return a one-dimensional vector.")
+
+    if step <= 0:
+        raise ValueError("step must be positive.")
+
+    J = np.zeros((len(fx), len(x)), dtype=float)
+
+    for k in range(len(x)):
+        x_perturbed = x.copy()
+        x_perturbed[k] += step
+
+        f_perturbed = np.asarray(
+            F(x_perturbed),
+            dtype=float
+        )
+
+        J[:, k] = (
+            f_perturbed - fx
+        ) / step
+
+    return J
 
 
 def classical_solution(A: np.ndarray, b: np.ndarray):
@@ -64,63 +127,182 @@ def classical_solution(A: np.ndarray, b: np.ndarray):
     return np.linalg.solve(A, b)
 
 
-def normalized_solution(A: np.ndarray, b: np.ndarray):
-    solution = classical_solution(A, b)
-
-    norm_solution = np.linalg.norm(solution, ord=2)
-
-    if np.isclose(norm_solution, 0.0):
-        raise ValueError("Solution has zero norm.")
-
-    return solution / norm_solution, norm_solution
-
-
-def finite_size_quantum_solution_state(A: np.ndarray, b: np.ndarray):
-    normalized_x, solution_norm = normalized_solution(A, b)
-
-    padded_x = pad_to_power_of_two(normalized_x)
-
-    padded_x = padded_x / np.linalg.norm(padded_x)
-
-    return padded_x, normalized_x, solution_norm
-
-
-def run_quantum_solution_circuit(
-    solution_state: np.ndarray,
+def run_rhs_preparation_circuit(
+    rhs_state: np.ndarray,
     shots: int | None = None
 ):
-    solution_state = np.asarray(solution_state, dtype=float)
+    rhs_state = np.asarray(rhs_state, dtype=float)
 
-    n_qubits = number_of_qubits(len(solution_state))
+    n_qubits = number_of_qubits(len(rhs_state))
 
     dev = qml.device(
-    "default.qubit",
-    wires=n_qubits
+        "default.qubit",
+        wires=n_qubits,
+        shots=shots
     )
 
-    @qml.qnode(dev, shots=shots)
+    @qml.qnode(dev)
     def circuit():
         qml.AmplitudeEmbedding(
-            solution_state,
+            rhs_state,
             wires=range(n_qubits),
             normalize=False
         )
 
-        return qml.probs(wires=range(n_qubits))
+        return qml.state()
 
     return circuit()
 
 
-def reconstruct_amplitudes_from_probabilities(probabilities):
-    probabilities = np.asarray(probabilities, dtype=float)
+def qlss_solver(
+    A: np.ndarray,
+    rhs_state: np.ndarray,
+    shots: int | None = None
+) -> np.ndarray:
 
-    return np.sqrt(np.maximum(probabilities, 0.0))
+    A = np.asarray(A, dtype=float)
+    rhs_state = np.asarray(rhs_state, dtype=float)
+
+    if A.ndim != 2:
+        raise ValueError("A must be a matrix.")
+
+    if A.shape[0] != A.shape[1]:
+        raise ValueError("A must be square.")
+
+    n = A.shape[0]
+
+    if rhs_state.ndim != 1:
+        raise ValueError(
+            "rhs_state must be one-dimensional."
+        )
+
+    if len(rhs_state) < n:
+        raise ValueError(
+            "rhs_state dimension is smaller than A."
+        )
+
+    rhs_state = rhs_state[:n]
+
+    rhs_norm = np.linalg.norm(rhs_state)
+
+    if np.isclose(rhs_norm, 0.0):
+        raise ValueError(
+            "rhs_state cannot have zero norm."
+        )
+
+    rhs_state = rhs_state / rhs_norm
+
+    H = np.block([
+        [
+            np.zeros_like(A),
+            A
+        ],
+        [
+            A.T,
+            np.zeros_like(A)
+        ]
+    ])
+
+    b_embedded = np.zeros(
+        2 * n,
+        dtype=float
+    )
+
+    b_embedded[:n] = rhs_state
+
+    b_embedded /= np.linalg.norm(
+        b_embedded
+    )
+
+    eigenvalues, eigenvectors = np.linalg.eigh(H)
+
+    coefficients = (
+        eigenvectors.T
+        @ b_embedded
+    )
+
+    solution_embedded = np.zeros(
+        2 * n,
+        dtype=float
+    )
+
+    tolerance = 1e-10
+
+    for i, eigenvalue in enumerate(
+        eigenvalues
+    ):
+
+        if abs(eigenvalue) <= tolerance:
+            continue
+
+        solution_embedded += (
+            coefficients[i]
+            / eigenvalue
+        ) * eigenvectors[:, i]
+
+    solution = solution_embedded[n:]
+
+    solution_norm = np.linalg.norm(
+        solution
+    )
+
+    if np.isclose(
+        solution_norm,
+        0.0
+    ):
+        raise RuntimeError(
+            "QLSS produced a zero solution."
+        )
+
+    solution = (
+        solution
+        / solution_norm
+    )
+
+    n_qubits = number_of_qubits(n)
+
+    padded_dimension = 2 ** n_qubits
+
+    padded_solution = np.zeros(
+        padded_dimension,
+        dtype=float
+    )
+
+    padded_solution[:n] = solution
+
+    padded_solution /= np.linalg.norm(
+        padded_solution
+    )
+
+    dev = qml.device(
+        "default.qubit",
+        wires=n_qubits,
+        shots=None
+    )
+
+    @qml.qnode(dev)
+    def solution_state_circuit():
+
+        qml.AmplitudeEmbedding(
+            padded_solution,
+            wires=range(n_qubits),
+            normalize=False
+        )
+
+        return qml.state()
+
+    quantum_state = solution_state_circuit()
+
+    return np.real_if_close(
+        quantum_state[:n]
+    ).astype(float)
 
 
 def solve_fixed_linear_system(
     A: np.ndarray,
     b: np.ndarray,
-    shots: int | None = None
+    shots: int | None = None,
+    run_qlss: bool = False
 ):
     A = np.asarray(A, dtype=float)
     b = np.asarray(b, dtype=float)
@@ -138,69 +320,47 @@ def solve_fixed_linear_system(
 
     normalized_A, matrix_scale = normalize_matrix(A)
 
-    normalized_b, b_scale = prepare_rhs_state(b)
+    rhs_state, b_scale = build_Ob(b)
 
-    n_qubits = number_of_qubits(A.shape[0])
+    OA1 = build_OA1(normalized_A)
+    OA2 = build_OA2(normalized_A)
 
-    quantum_state, normalized_x, solution_norm = (
-        finite_size_quantum_solution_state(A, b)
-    )
-
-    probabilities = run_quantum_solution_circuit(
-        quantum_state,
-        shots=shots
-    )
-
-    measured_amplitudes = reconstruct_amplitudes_from_probabilities(
-        probabilities
-    )
-    
-    signs = np.sign(normalized_x)
-
-    
-    signs[np.isclose(normalized_x, 0.0)] = 0.0
-
-    measured_solution = measured_amplitudes[: len(normalized_x)] * signs
-
-    measured_norm = np.linalg.norm(measured_solution)
-
-    if not np.isclose(measured_norm, 0.0):
-        measured_solution = measured_solution / measured_norm
-
-    state_error = np.linalg.norm(
-        measured_solution - normalized_x,
-        ord=2
-    )
-
-    recovered_delta_x = measured_solution * solution_norm
-
-    exact_delta_x = classical_solution(A, b)
-
-    correction_error = np.linalg.norm(
-        recovered_delta_x - exact_delta_x,
-        ord=2
-    )
-
-    return {
+    result = {
         "matrix": A,
         "normalized_matrix": normalized_A,
         "matrix_scale": matrix_scale,
         "rhs": b,
-        "normalized_rhs": normalized_b,
+        "normalized_rhs": rhs_state,
         "rhs_scale": b_scale,
         "dimension": A.shape[0],
-        "qubits": n_qubits,
-        "exact_solution": exact_delta_x,
-        "solution_norm": solution_norm,
-        "normalized_classical_solution": normalized_x,
-        "quantum_state": quantum_state,
-        "probabilities": probabilities,
-        "measured_solution": measured_solution,
-        "recovered_delta_x": recovered_delta_x,
-        "state_error_l2": state_error,
-        "correction_error_l2": correction_error,
+        "qubits": number_of_qubits(A.shape[0]),
+        "OA1": OA1,
+        "OA2": OA2,
+        "quantum_solution_state": None,
+        "classical_reference_solution": classical_solution(A, b),
         "shots": shots,
     }
+
+    if run_qlss:
+        quantum_solution = qlss_solver(
+            normalized_A,
+            rhs_state,
+            shots=shots
+        )
+
+        result["quantum_solution_state"] = quantum_solution
+
+        classical = result["classical_reference_solution"]
+        classical = classical / np.linalg.norm(classical)
+
+        quantum = quantum_solution[:len(classical)]
+        quantum = quantum / np.linalg.norm(quantum)
+
+        result["state_error_l2"] = np.linalg.norm(
+            quantum - classical
+        )
+
+    return result
 
 
 if __name__ == "__main__":
@@ -218,60 +378,32 @@ if __name__ == "__main__":
     result = solve_fixed_linear_system(
         J,
         b,
-        shots=None
+        shots=None,
+        run_qlss=True
     )
 
-    print("\n=== QNM Finite-Size Quantum Linear-System Prototype ===")
-
-    print("\nOriginal matrix J:")
-    print(result["matrix"])
-
-    print("\nNormalized matrix A:")
+    print("\nNormalized matrix:")
     print(result["normalized_matrix"])
 
-    print(
-        "\nMatrix normalization constant:",
-        result["matrix_scale"]
-    )
-
-    print("\nOriginal RHS b:")
-    print(result["rhs"])
-
-    print("\nNormalized RHS |b>:")
+    print("\nNormalized RHS:")
     print(result["normalized_rhs"])
 
-    print(
-        "\nRHS normalization constant:",
-        result["rhs_scale"]
-    )
+    print("\nO_A1:")
+    print(result["OA1"])
 
-    print("\nNumber of qubits:")
-    print(result["qubits"])
+    print("\nO_A2 values:")
 
-    print("\nExact classical correction:")
-    print(result["exact_solution"])
+    for j in range(J.shape[0]):
+        for k in range(J.shape[1]):
+            print(
+                f"O_A2({j}, {k}) = "
+                f"{result['OA2'](j, k)}"
+            )
 
-    print("\nNormalized classical solution state:")
-    print(result["normalized_classical_solution"])
+    print("\nClassical reference solution:")
+    print(result["classical_reference_solution"])
+    print("\nQuantum solution state:")
+    print(result["quantum_solution_state"])
 
-    print("\nQuantum state:")
-    print(result["quantum_state"])
-
-    print("\nMeasured probabilities:")
-    print(result["probabilities"])
-
-    print("\nRecovered normalized solution:")
-    print(result["measured_solution"])
-
-    print("\nRecovered Delta x:")
-    print(result["recovered_delta_x"])
-
-    print(
-        "\nNormalized-state L2 error:",
-        result["state_error_l2"]
-    )
-
-    print(
-        "\nCorrection-vector L2 error:",
-        result["correction_error_l2"]
-    )
+    print("\nState error:")
+    print(result["state_error_l2"])
